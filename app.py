@@ -18,7 +18,8 @@ import yaml
 app = Flask(__name__)
 
 # ──────────────────────────────────────────────
-# Demo data: agent definitions and their tools
+# Agent definitions — real tool names from
+# containers/kubernetes-mcp-server (19 tools)
 # ──────────────────────────────────────────────
 
 AGENTS = {
@@ -28,7 +29,17 @@ AGENTS = {
         "risk": "low",
         "icon": "ti-activity",
         "color": "blue",
-        "allowed_tools": ["query_metrics", "list_incidents", "get_runbook", "check_slo"],
+        "allowed_tools": [
+            "pods_list",
+            "pods_list_in_namespace",
+            "pods_get",
+            "pods_log",
+            "pods_top",
+            "events_list",
+            "namespaces_list",
+            "nodes_top",
+            "configuration_view",
+        ],
     },
     "cost-agent": {
         "label": "Cost Agent",
@@ -36,7 +47,14 @@ AGENTS = {
         "risk": "low",
         "icon": "ti-chart-bar",
         "color": "green",
-        "allowed_tools": ["get_resource_usage", "list_rightsizing_recommendations", "get_billing_summary"],
+        "allowed_tools": [
+            "nodes_stats_summary",
+            "nodes_top",
+            "nodes_log",
+            "pods_top",
+            "resources_list",
+            "resources_get",
+        ],
     },
     "remediation-agent": {
         "label": "Remediation Agent",
@@ -44,27 +62,43 @@ AGENTS = {
         "risk": "high",
         "icon": "ti-tool",
         "color": "amber",
-        "allowed_tools": ["restart_pod", "scale_deployment", "rollback_deployment"],
+        "allowed_tools": [
+            "pods_delete",
+            "pods_exec",
+            "pods_run",
+            "resources_scale",
+            "resources_create_or_update",
+            "resources_delete",
+        ],
     },
 }
 
 TENANTS = ["tenant-acme", "tenant-globex"]
 
+# Real 19 tools from containers/kubernetes-mcp-server
 ALL_TOOLS = [
-    # observability tools
-    {"name": "query_metrics",    "category": "observability", "write": False},
-    {"name": "list_incidents",   "category": "observability", "write": False},
-    {"name": "get_runbook",      "category": "observability", "write": False},
-    {"name": "check_slo",        "category": "observability", "write": False},
-    # cost tools
-    {"name": "get_resource_usage",                  "category": "cost", "write": False},
-    {"name": "list_rightsizing_recommendations",    "category": "cost", "write": False},
-    {"name": "get_billing_summary",                 "category": "cost", "write": False},
-    # remediation tools (write)
-    {"name": "restart_pod",         "category": "remediation", "write": True},
-    {"name": "scale_deployment",    "category": "remediation", "write": True},
-    {"name": "rollback_deployment", "category": "remediation", "write": True},
-    {"name": "delete_resource",     "category": "remediation", "write": True},
+    # ── Observability (sre-agent) ──────────────────────────────────────────
+    {"name": "pods_list",              "category": "observability", "write": False},
+    {"name": "pods_list_in_namespace", "category": "observability", "write": False},
+    {"name": "pods_get",               "category": "observability", "write": False},
+    {"name": "pods_log",               "category": "observability", "write": False},
+    {"name": "pods_top",               "category": "observability", "write": False},
+    {"name": "events_list",            "category": "observability", "write": False},
+    {"name": "namespaces_list",        "category": "observability", "write": False},
+    {"name": "nodes_top",              "category": "observability", "write": False},
+    {"name": "configuration_view",     "category": "observability", "write": False},
+    # ── Cost (cost-agent) ─────────────────────────────────────────────────
+    {"name": "nodes_stats_summary",    "category": "cost",          "write": False},
+    {"name": "nodes_log",              "category": "cost",          "write": False},
+    {"name": "resources_list",         "category": "cost",          "write": False},
+    {"name": "resources_get",          "category": "cost",          "write": False},
+    # ── Remediation (remediation-agent) — write tools ─────────────────────
+    {"name": "pods_delete",            "category": "remediation",   "write": True},
+    {"name": "pods_exec",              "category": "remediation",   "write": True},
+    {"name": "pods_run",               "category": "remediation",   "write": True},
+    {"name": "resources_scale",        "category": "remediation",   "write": True},
+    {"name": "resources_create_or_update", "category": "remediation", "write": True},
+    {"name": "resources_delete",       "category": "remediation",   "write": True},
 ]
 
 WRITE_TOOLS = [t["name"] for t in ALL_TOOLS if t["write"]]
@@ -76,8 +110,8 @@ WRITE_TOOLS = [t["name"] for t in ALL_TOOLS if t["write"]]
 
 def evaluate_policies(invocation: dict) -> dict:
     """
-    Simulates Kyverno ClusterPolicy evaluation.
-    Returns a dict with decision, violated_policy, and explanation.
+    Simulates Kyverno ValidatingPolicy / MutatingPolicy evaluation.
+    Returns decision, policy_results, and audit annotations.
     """
     agent_id     = invocation.get("agentId", "")
     tool_name    = invocation.get("toolName", "")
@@ -87,77 +121,82 @@ def evaluate_policies(invocation: dict) -> dict:
 
     results = []
 
-    # ── Policy 1: Tool Allowlist ──────────────────────────────────────────
+    # ── Policy 1: Tool Allowlist (spec.agentId based) ─────────────────────
     agent = AGENTS.get(agent_id)
     if agent:
         if tool_name not in agent["allowed_tools"]:
             results.append({
                 "policy": "mcp-tool-allowlist",
-                "rule": f"{agent_id}-allowlist",
+                "rule":   f"{agent_id}-allowlist",
                 "result": "FAIL",
                 "message": (
-                    f"Agent '{agent_id}' is not permitted to invoke tool '{tool_name}'. "
+                    f"Agent '{agent_id}' is not permitted to invoke '{tool_name}'. "
                     f"Allowed: {', '.join(agent['allowed_tools'])}"
                 ),
             })
         else:
             results.append({
                 "policy": "mcp-tool-allowlist",
-                "rule": f"{agent_id}-allowlist",
+                "rule":   f"{agent_id}-allowlist",
                 "result": "PASS",
                 "message": f"Tool '{tool_name}' is in the allowlist for '{agent_id}'",
             })
     else:
         results.append({
             "policy": "mcp-tool-allowlist",
-            "rule": "unknown-agent",
+            "rule":   "unknown-agent",
             "result": "FAIL",
-            "message": f"Unknown agent identity '{agent_id}' — no allowlist found. Deny by default.",
+            "message": (
+                f"Unknown agent '{agent_id}' — not registered. "
+                "Permitted agents: sre-agent, cost-agent, remediation-agent"
+            ),
         })
 
     # ── Policy 2: Tenant Isolation ────────────────────────────────────────
     if not tenant_id:
         results.append({
             "policy": "mcp-tenant-isolation",
-            "rule": "require-tenant-context",
+            "rule":   "require-tenant-context",
             "result": "FAIL",
-            "message": "MCPToolInvocation must include a non-empty tenantId.",
+            "message": "MCPToolInvocation must include a non-empty tenantId in spec.",
         })
     elif tenant_id != namespace:
         results.append({
             "policy": "mcp-tenant-isolation",
-            "rule": "block-cross-tenant-invocations",
+            "rule":   "block-cross-tenant-invocations",
             "result": "FAIL",
             "message": (
                 f"Cross-tenant invocation denied. "
-                f"Agent namespace '{namespace}' ≠ tenantId '{tenant_id}'."
+                f"Agent namespace '{namespace}' does not match tenantId '{tenant_id}'."
             ),
         })
     else:
         results.append({
             "policy": "mcp-tenant-isolation",
-            "rule": "block-cross-tenant-invocations",
+            "rule":   "block-cross-tenant-invocations",
             "result": "PASS",
             "message": f"Tenant context '{tenant_id}' matches namespace '{namespace}'",
         })
 
-    # ── Policy 3: Human Identity (mutating — always passes, just annotates) ──
+    # ── Policy 3a: Human Identity Injection (mutating — always passes) ────
     results.append({
         "policy": "mcp-inject-human-identity",
-        "rule": "inject-human-identity-annotations",
+        "rule":   "inject-human-identity-annotations",
         "result": "MUTATE",
         "message": (
             f"Injected: mcp.security.io/triggered-by={triggered_by or agent_id}, "
-            f"mcp.security.io/triggered-at={datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}"
+            f"mcp.security.io/triggered-at="
+            f"{datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}, "
+            f"mcp.security.io/policy-version=v1"
         ),
     })
 
-    # ── Policy 4: Require Human Trigger for Write Tools ───────────────────
+    # ── Policy 3b: Require Human Trigger for Write Tools ─────────────────
     if tool_name in WRITE_TOOLS:
         if not triggered_by:
             results.append({
                 "policy": "mcp-require-human-trigger",
-                "rule": "require-human-trigger-for-write-tools",
+                "rule":   "require-human-trigger-for-write-tools",
                 "result": "FAIL",
                 "message": (
                     f"Write-capable tool '{tool_name}' requires a human triggeredBy field. "
@@ -167,43 +206,42 @@ def evaluate_policies(invocation: dict) -> dict:
         else:
             results.append({
                 "policy": "mcp-require-human-trigger",
-                "rule": "require-human-trigger-for-write-tools",
+                "rule":   "require-human-trigger-for-write-tools",
                 "result": "PASS",
-                "message": f"Human trigger '{triggered_by}' is present for write tool '{tool_name}'",
+                "message": f"Human trigger '{triggered_by}' present for write tool '{tool_name}'",
             })
 
     # ── Final decision ────────────────────────────────────────────────────
-    failed = [r for r in results if r["result"] == "FAIL"]
+    failed   = [r for r in results if r["result"] == "FAIL"]
     decision = "DENIED" if failed else "ALLOWED"
 
     return {
-        "decision": decision,
-        "policy_results": results,
-        "failed_count": len(failed),
-        "pass_count": len([r for r in results if r["result"] == "PASS"]),
+        "decision":        decision,
+        "policy_results":  results,
+        "failed_count":    len(failed),
+        "pass_count":      len([r for r in results if r["result"] == "PASS"]),
         "audit_annotations": {
-            "mcp.security.io/triggered-by": triggered_by or agent_id,
-            "mcp.security.io/triggered-at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "mcp.security.io/agent-id": agent_id,
-            "mcp.security.io/tenant-id": tenant_id,
-            "mcp.security.io/policy-version": "v1",
-            "mcp.security.io/decision": decision,
+            "mcp.security.io/triggered-by":    triggered_by or agent_id,
+            "mcp.security.io/triggered-at":    datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "mcp.security.io/agent-id":        agent_id,
+            "mcp.security.io/tenant-id":       tenant_id,
+            "mcp.security.io/policy-version":  "v1",
+            "mcp.security.io/decision":        decision,
         },
     }
 
 
 def try_kubectl_apply(invocation: dict) -> dict:
     """
-    Attempts to apply the MCPToolInvocation to the real cluster if kubectl is available.
-    Falls back to simulated evaluation if not in cluster context.
+    Attempts to apply MCPToolInvocation to the real cluster via kubectl.
+    Falls back to simulated evaluation if kubectl unavailable.
     """
-    # Build the manifest
     manifest = {
         "apiVersion": "mcp.security.io/v1alpha1",
-        "kind": "MCPToolInvocation",
+        "kind":       "MCPToolInvocation",
         "metadata": {
             "generateName": "demo-",
-            "namespace": invocation.get("namespace", "tenant-acme"),
+            "namespace":    invocation.get("namespace", "tenant-acme"),
         },
         "spec": {
             "toolName":    invocation.get("toolName"),
@@ -224,8 +262,8 @@ def try_kubectl_apply(invocation: dict) -> dict:
         )
         return {
             "kubectl_available": True,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "stdout":     result.stdout,
+            "stderr":     result.stderr,
             "returncode": result.returncode,
         }
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -233,78 +271,119 @@ def try_kubectl_apply(invocation: dict) -> dict:
 
 
 # ──────────────────────────────────────────────
-# Predefined demo scenarios for the talk
+# Predefined demo scenarios
+# Tool names match real kubernetes-mcp-server
 # ──────────────────────────────────────────────
 
 SCENARIOS = [
     {
-        "id": "allowed-sre-metrics",
-        "label": "✅ SRE queries metrics (allowed)",
-        "description": "SRE agent queries metrics within its own tenant. All policies pass.",
+        "id":          "allowed-sre-pods",
+        "label":       "✅ SRE lists pods in own namespace (allowed)",
+        "description": "SRE agent lists pods within its own tenant namespace. All policies pass.",
         "invocation": {
-            "agentId": "sre-agent",
-            "toolName": "query_metrics",
-            "namespace": "tenant-acme",
-            "tenantId": "tenant-acme",
+            "agentId":     "sre-agent",
+            "toolName":    "pods_list_in_namespace",
+            "namespace":   "tenant-acme",
+            "tenantId":    "tenant-acme",
             "triggeredBy": "alice@acme.com",
-            "reason": "Investigating elevated p99 latency on checkout",
-            "parameters": {"service": "checkout", "metric": "http_request_duration_p99"},
+            "reason":      "Checking pod status during incident investigation",
+            "parameters":  {"namespace": "tenant-acme"},
         },
     },
     {
-        "id": "denied-tool-allowlist",
-        "label": "❌ SRE tries to scale deployment (tool not in allowlist)",
-        "description": "SRE agent attempts to invoke scale_deployment — outside its allowlist. Policy 1 blocks.",
+        "id":          "denied-tool-allowlist",
+        "label":       "❌ SRE tries to scale deployment (not in allowlist)",
+        "description": "SRE agent attempts resources_scale — outside its allowlist. Policy 1 blocks.",
         "invocation": {
-            "agentId": "sre-agent",
-            "toolName": "scale_deployment",
-            "namespace": "tenant-acme",
-            "tenantId": "tenant-acme",
+            "agentId":     "sre-agent",
+            "toolName":    "resources_scale",
+            "namespace":   "tenant-acme",
+            "tenantId":    "tenant-acme",
             "triggeredBy": "alice@acme.com",
-            "reason": "Trying to scale after seeing high latency",
-            "parameters": {"deployment": "checkout", "replicas": 5},
+            "reason":      "Trying to scale after seeing high latency",
+            "parameters":  {
+                "apiVersion": "apps/v1",
+                "kind":       "Deployment",
+                "name":       "checkout",
+                "namespace":  "tenant-acme",
+                "replicas":   5,
+            },
         },
     },
     {
-        "id": "denied-cross-tenant",
-        "label": "❌ SRE crosses tenant boundary (cross-tenant blocked)",
-        "description": "SRE agent in tenant-acme namespace tries to access tenant-globex data. Policy 2 blocks.",
+        "id":          "denied-cross-tenant",
+        "label":       "❌ SRE crosses tenant boundary (cross-tenant blocked)",
+        "description": "SRE agent in tenant-acme tries to list pods in tenant-globex. Policy 2 blocks.",
         "invocation": {
-            "agentId": "sre-agent",
-            "toolName": "query_metrics",
-            "namespace": "tenant-acme",
-            "tenantId": "tenant-globex",
+            "agentId":     "sre-agent",
+            "toolName":    "pods_list_in_namespace",
+            "namespace":   "tenant-acme",
+            "tenantId":    "tenant-globex",
             "triggeredBy": "alice@acme.com",
-            "reason": "Checking Globex error rate out of curiosity",
-            "parameters": {"service": "payments", "metric": "error_rate"},
+            "reason":      "Checking Globex pods out of curiosity",
+            "parameters":  {"namespace": "tenant-globex"},
         },
     },
     {
-        "id": "denied-no-human",
-        "label": "❌ Remediation restarts pod without human trigger",
-        "description": "Automated remediation fires without a human triggeredBy. Policy 4 blocks write tool.",
+        "id":          "denied-no-human",
+        "label":       "❌ Remediation deletes pod without human trigger",
+        "description": "Autonomous remediation fires pods_delete without a human triggeredBy. Policy 3b blocks.",
         "invocation": {
-            "agentId": "remediation-agent",
-            "toolName": "restart_pod",
-            "namespace": "tenant-acme",
-            "tenantId": "tenant-acme",
+            "agentId":     "remediation-agent",
+            "toolName":    "pods_delete",
+            "namespace":   "tenant-acme",
+            "tenantId":    "tenant-acme",
             "triggeredBy": "",
-            "reason": "Auto-remediation triggered by alert rule",
-            "parameters": {"pod": "checkout-7d9b4c-xkp2n"},
+            "reason":      "Auto-remediation triggered by alert rule",
+            "parameters":  {"name": "checkout-7d9b4c-xkp2n", "namespace": "tenant-acme"},
         },
     },
     {
-        "id": "allowed-remediation",
-        "label": "✅ Remediation restarts pod with human approval",
-        "description": "Remediation agent restarts pod with human context. All policies pass.",
+        "id":          "allowed-remediation",
+        "label":       "✅ Remediation deletes pod with human approval",
+        "description": "Remediation agent deletes pod with human context. All policies pass.",
         "invocation": {
-            "agentId": "remediation-agent",
-            "toolName": "restart_pod",
-            "namespace": "tenant-acme",
-            "tenantId": "tenant-acme",
+            "agentId":     "remediation-agent",
+            "toolName":    "pods_delete",
+            "namespace":   "tenant-acme",
+            "tenantId":    "tenant-acme",
             "triggeredBy": "bob@acme.com",
-            "reason": "Pod in CrashLoopBackOff, approved by on-call engineer Bob",
-            "parameters": {"pod": "checkout-7d9b4c-xkp2n"},
+            "reason":      "Pod in CrashLoopBackOff, approved by on-call engineer Bob",
+            "parameters":  {"name": "checkout-7d9b4c-xkp2n", "namespace": "tenant-acme"},
+        },
+    },
+    {
+        "id":          "allowed-cost-resources",
+        "label":       "✅ Cost agent reads resource usage (allowed)",
+        "description": "Cost agent lists resources for rightsizing analysis. All policies pass.",
+        "invocation": {
+            "agentId":     "cost-agent",
+            "toolName":    "resources_list",
+            "namespace":   "tenant-acme",
+            "tenantId":    "tenant-acme",
+            "triggeredBy": "carol@acme.com",
+            "reason":      "Weekly rightsizing analysis",
+            "parameters":  {"apiVersion": "apps/v1", "kind": "Deployment", "namespace": "tenant-acme"},
+        },
+    },
+    {
+        "id":          "denied-cost-write",
+        "label":       "❌ Cost agent tries to scale (not in allowlist)",
+        "description": "Cost agent attempts resources_scale — outside its allowlist. Policy 1 blocks.",
+        "invocation": {
+            "agentId":     "cost-agent",
+            "toolName":    "resources_scale",
+            "namespace":   "tenant-acme",
+            "tenantId":    "tenant-acme",
+            "triggeredBy": "carol@acme.com",
+            "reason":      "Trying to right-size deployment directly",
+            "parameters":  {
+                "apiVersion": "apps/v1",
+                "kind":       "Deployment",
+                "name":       "checkout",
+                "namespace":  "tenant-acme",
+                "replicas":   2,
+            },
         },
     },
 ]
@@ -329,20 +408,17 @@ def index():
 def invoke_tool():
     data = request.get_json()
 
-    # Simulate network latency for realism
+    # Simulate admission latency for realism
     time.sleep(0.3)
 
-    # Run policy evaluation
-    result = evaluate_policies(data)
-
-    # Try real kubectl if available
+    result       = evaluate_policies(data)
     kubectl_result = try_kubectl_apply(data)
 
     return jsonify({
         **result,
         "invocation": data,
-        "kubectl": kubectl_result,
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "kubectl":    kubectl_result,
+        "timestamp":  datetime.datetime.utcnow().isoformat() + "Z",
     })
 
 
@@ -359,6 +435,11 @@ def get_agents():
     return jsonify(AGENTS)
 
 
+@app.route("/api/tools")
+def get_tools():
+    return jsonify(ALL_TOOLS)
+
+
 @app.route("/api/policies")
 def get_policies():
     policies_dir = os.path.join(os.path.dirname(__file__), "k8s", "policies")
@@ -372,6 +453,6 @@ def get_policies():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port  = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("DEBUG", "true").lower() == "true"
     app.run(host="0.0.0.0", port=port, debug=debug)
