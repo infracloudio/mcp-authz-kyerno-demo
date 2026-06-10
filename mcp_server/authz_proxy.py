@@ -66,11 +66,14 @@ app = FastAPI(title="MCP AuthZ Proxy", version="1.0.0")
 
 # ── Kubernetes CR helpers ─────────────────────────────────────────────────────
 
-def create_invocation_cr(tool_name: str, params: dict, triggered_by: str, reason: str) -> dict:
+def create_invocation_cr(tool_name: str, params: dict, triggered_by: str, reason: str, agent_id: str = None) -> dict:
     """Create an MCPToolInvocation CR and let Kyverno evaluate it."""
     if not K8S_AVAILABLE:
         log.warning("K8s client not available — simulating CR creation")
         return {"simulated": True, "admitted": True}
+
+    # Use agent_id from request header if provided, fall back to pod env var
+    effective_agent_id = agent_id or AGENT_ID
 
     custom_api = client.CustomObjectsApi()
     name = f"proxy-{tool_name.replace('_', '-')}-{uuid.uuid4().hex[:6]}"
@@ -82,13 +85,13 @@ def create_invocation_cr(tool_name: str, params: dict, triggered_by: str, reason
             "name": name,
             "namespace": TENANT_ID,
             "labels": {
-                "mcp.security.io/agent-id":  AGENT_ID,
+                "mcp.security.io/agent-id":  effective_agent_id,
                 "mcp.security.io/tool-name": tool_name,
             },
         },
         "spec": {
             "toolName":    tool_name,
-            "agentId":     AGENT_ID,
+            "agentId":     effective_agent_id,
             "tenantId":    TENANT_ID,
             "triggeredBy": triggered_by,
             "reason":      reason,
@@ -154,14 +157,17 @@ async def proxy_mcp_post(request: Request):
     tool_args    = params.get("arguments", {})
     triggered_by = request.headers.get("x-triggered-by", "")
     reason       = request.headers.get("x-reason", "")
+    # Read agent identity from header — allows demo to switch agents
+    # without redeploying the proxy pod
+    agent_id     = request.headers.get("x-agent-id", AGENT_ID)
 
     log.info(
-        f"Intercepted: tool={tool_name}  agent={AGENT_ID}  "
+        f"Intercepted: tool={tool_name}  agent={agent_id}  "
         f"tenant={TENANT_ID}  triggered_by='{triggered_by}'"
     )
 
     # Create MCPToolInvocation CR — Kyverno admission webhook fires here
-    cr_result = create_invocation_cr(tool_name, tool_args, triggered_by, reason)
+    cr_result = create_invocation_cr(tool_name, tool_args, triggered_by, reason, agent_id)
 
     if not cr_result.get("admitted") and not cr_result.get("simulated"):
         policy_msg = cr_result.get("reason", "Tool invocation denied by policy")
