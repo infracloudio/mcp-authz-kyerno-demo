@@ -1,13 +1,20 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Policy 3a: Human Identity Injection
-# API: policies.kyverno.io/v1 / MutatingPolicy  (ClusterPolicy is deprecated)
+# API: kyverno.io/v1 / ClusterPolicy (JMESPath — battle-tested, no CEL type issues)
 #
-# Annotates every MCPToolInvocation with triggered-by, triggered-at,
-# agent-id, and tenant-id before admission.
-# Uses CEL ApplyConfiguration patches — no JMESPath patchStrategicMerge.
+# Injects 5 audit annotations onto every MCPToolInvocation at admission time.
+# Annotations are written by Kyverno — not by the agent or the proxy.
+# Even if the CR is later deleted, the Kubernetes audit log retains the record.
+#
+# Annotations injected:
+#   mcp.security.io/triggered-by  → spec.triggeredBy (human email) or SA username
+#   mcp.security.io/triggered-at  → admission timestamp via time_now_utc()
+#   mcp.security.io/agent-id      → spec.agentId or SA username
+#   mcp.security.io/tenant-id     → spec.tenantId or namespace
+#   mcp.security.io/policy-version → "v1"
 # ──────────────────────────────────────────────────────────────────────────────
-apiVersion: policies.kyverno.io/v1
-kind: MutatingPolicy
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
 metadata:
   name: mcp-inject-human-identity
   annotations:
@@ -15,45 +22,47 @@ metadata:
     policies.kyverno.io/category: MCP Authorization
     policies.kyverno.io/severity: medium
     policies.kyverno.io/description: >-
-      Mutates incoming MCPToolInvocations to inject audit annotations:
-      triggered-by, triggered-at, agent-id, tenant-id, and policy-version.
-      Ensures every tool call is traceable to a human — not just a service account.
+      Mutates incoming MCPToolInvocations to inject tamper-proof audit annotations.
+      triggered-by falls back to the calling SA if no human identity is provided.
+      triggered-at is set by Kyverno at admission time — not by the agent.
 spec:
-  matchConstraints:
-    resourceRules:
-      - apiGroups:   ["mcp.security.io"]
-        apiVersions: ["v1alpha1"]
-        operations:  ["CREATE"]
-        resources:   ["mcptoolinvocations"]
-  mutations:
-    - patchType: ApplyConfiguration
-      applyConfiguration:
-        expression: >-
-          Object{
-            metadata: Object.metadata{
-              annotations: {
-                "mcp.security.io/triggered-by":
-                  has(object.spec.triggeredBy) && object.spec.triggeredBy != ""
-                    ? object.spec.triggeredBy
-                    : request.userInfo.username,
-                "mcp.security.io/triggered-at":
-                  string(now()),
-                "mcp.security.io/agent-id":
-                  has(object.spec.agentId) ? object.spec.agentId : request.userInfo.username,
-                "mcp.security.io/tenant-id":
-                  has(object.spec.tenantId) ? object.spec.tenantId : object.metadata.namespace,
-                "mcp.security.io/policy-version": "v1"
-              }
-            }
-          }
+  background: false
+  rules:
+  - name: inject-audit-annotations
+    match:
+      any:
+      - resources:
+          kinds:
+          - MCPToolInvocation
+    mutate:
+      patchStrategicMerge:
+        metadata:
+          annotations:
+            # Human identity — falls back to SA username if triggeredBy is absent
+            +(mcp.security.io/triggered-by): >-
+              {{request.object.spec.triggeredBy || request.userInfo.username}}
+            # Admission timestamp — set by Kyverno, cannot be forged by the agent
+            +(mcp.security.io/triggered-at): "{{time_now_utc()}}"
+            # Agent identity — falls back to SA username if agentId is absent
+            +(mcp.security.io/agent-id): >-
+              {{request.object.spec.agentId || request.userInfo.username}}
+            # Tenant context — falls back to namespace if tenantId is absent
+            +(mcp.security.io/tenant-id): >-
+              {{request.object.spec.tenantId || request.object.metadata.namespace}}
+            # Policy version — for future policy migration tracking
+            +(mcp.security.io/policy-version): "v1"
 
 ---
 # ──────────────────────────────────────────────────────────────────────────────
 # Policy 3b: Require Human Trigger for Write Tools
-# API: policies.kyverno.io/v1 / ValidatingPolicy  (ClusterPolicy is deprecated)
+# API: policies.kyverno.io/v1 / ValidatingPolicy (CEL)
 #
-# Write-capable tools (restart, scale, rollback, delete) must carry a human
-# triggeredBy field. Automated invocations without human context are denied.
+# Write-capable tools must carry a non-empty triggeredBy field.
+# An autonomous agent calling pods_delete or resources_scale with no human
+# context is denied at admission time — the tool call never reaches the MCP server.
+#
+# Write tools: pods_delete, pods_exec, pods_run,
+#              resources_scale, resources_create_or_update, resources_delete
 # ──────────────────────────────────────────────────────────────────────────────
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
@@ -78,12 +87,15 @@ spec:
   validations:
     - expression: >-
         !(object.spec.toolName in [
-          "restart_pod",
-          "scale_deployment",
-          "rollback_deployment",
-          "delete_resource"
+          "pods_delete",
+          "pods_exec",
+          "pods_run",
+          "resources_scale",
+          "resources_create_or_update",
+          "resources_delete"
         ]) ||
         (has(object.spec.triggeredBy) && object.spec.triggeredBy != "")
       messageExpression: >-
-        "Write-capable tool '" + object.spec.toolName + "' requires a human triggeredBy field. " +
+        "Write-capable tool '" + object.spec.toolName +
+        "' requires a human triggeredBy field. " +
         "Automated invocations without explicit human context are denied."

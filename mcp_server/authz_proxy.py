@@ -84,6 +84,7 @@ def create_invocation_cr(
         "metadata": {
             "name":      name,
             "namespace": TENANT_ID,
+            "annotations": {},          # ← initialize so MutatingPolicy can add keys
             "labels": {
                 "mcp.security.io/agent-id":  effective_agent_id,
                 "mcp.security.io/tool-name": tool_name,
