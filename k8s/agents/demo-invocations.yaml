@@ -1,0 +1,91 @@
+---
+# SCENARIO 1: ALLOWED — SRE agent queries metrics for its own tenant
+# This should PASS all three policies
+apiVersion: mcp.security.io/v1alpha1
+kind: MCPToolInvocation
+metadata:
+  name: sre-query-metrics-allowed
+  namespace: tenant-acme   # tenant namespace = tenantId ✓
+spec:
+  toolName: query_metrics   # in SRE agent allowlist ✓
+  agentId: sre-agent
+  tenantId: tenant-acme     # matches namespace ✓
+  triggeredBy: "alice@acme.com"
+  reason: "Investigating elevated p99 latency on checkout service"
+  parameters:
+    service: checkout
+    metric: http_request_duration_p99
+    window: 30m
+
+---
+# SCENARIO 2: DENIED — SRE agent tries to invoke a tool outside its allowlist
+# Policy 01 (tool-allowlist) will BLOCK this
+apiVersion: mcp.security.io/v1alpha1
+kind: MCPToolInvocation
+metadata:
+  name: sre-scale-deployment-denied
+  namespace: tenant-acme
+spec:
+  toolName: scale_deployment  # NOT in SRE agent allowlist ✗
+  agentId: sre-agent
+  tenantId: tenant-acme
+  triggeredBy: "alice@acme.com"
+  reason: "Trying to scale up after seeing high latency"
+  parameters:
+    deployment: checkout
+    replicas: 5
+
+---
+# SCENARIO 3: DENIED — Cross-tenant invocation attempt
+# Policy 02 (tenant-isolation) will BLOCK this
+apiVersion: mcp.security.io/v1alpha1
+kind: MCPToolInvocation
+metadata:
+  name: sre-cross-tenant-denied
+  namespace: tenant-acme    # agent is in acme namespace...
+spec:
+  toolName: query_metrics
+  agentId: sre-agent
+  tenantId: tenant-globex   # ...but trying to access globex data ✗
+  triggeredBy: "alice@acme.com"
+  reason: "Curious about Globex metrics"
+  parameters:
+    service: payments
+    metric: error_rate
+    window: 1h
+
+---
+# SCENARIO 4: DENIED — Remediation tool invoked without human trigger
+# Policy 04 (require-human-trigger) will BLOCK this
+apiVersion: mcp.security.io/v1alpha1
+kind: MCPToolInvocation
+metadata:
+  name: remediation-no-human-denied
+  namespace: tenant-acme
+spec:
+  toolName: restart_pod       # write tool — requires triggeredBy ✗
+  agentId: remediation-agent
+  tenantId: tenant-acme
+  # triggeredBy is missing — automated invocation with no human context
+  reason: "Auto-remediation triggered by alert"
+  parameters:
+    pod: checkout-7d9b4c-xkp2n
+    namespace: tenant-acme
+
+---
+# SCENARIO 5: ALLOWED — Remediation agent restarts pod with human context
+# This should PASS all policies
+apiVersion: mcp.security.io/v1alpha1
+kind: MCPToolInvocation
+metadata:
+  name: remediation-restart-pod-allowed
+  namespace: tenant-acme
+spec:
+  toolName: restart_pod        # in remediation agent allowlist ✓
+  agentId: remediation-agent
+  tenantId: tenant-acme        # matches namespace ✓
+  triggeredBy: "bob@acme.com"  # human context present ✓
+  reason: "Pod in CrashLoopBackOff, approved by on-call engineer"
+  parameters:
+    pod: checkout-7d9b4c-xkp2n
+    namespace: tenant-acme

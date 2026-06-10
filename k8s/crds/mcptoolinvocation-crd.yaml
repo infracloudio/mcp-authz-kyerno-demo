@@ -1,0 +1,76 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mcptoolinvocations.mcp.security.io
+spec:
+  group: mcp.security.io
+  names:
+    kind: MCPToolInvocation
+    listKind: MCPToolInvocationList
+    plural: mcptoolinvocations
+    singular: mcptoolinvocation
+    shortNames:
+      - mti
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["toolName", "agentId", "tenantId"]
+              properties:
+                toolName:
+                  type: string
+                  description: "The MCP tool being invoked"
+                agentId:
+                  type: string
+                  description: "Identity of the invoking agent"
+                tenantId:
+                  type: string
+                  description: "Tenant context for this invocation"
+                parameters:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: "Tool parameters"
+                triggeredBy:
+                  type: string
+                  description: "Human identity that triggered this agent"
+                reason:
+                  type: string
+                  description: "Human-provided reason for the action"
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: ["Pending", "Allowed", "Denied", "Executed", "Failed"]
+                result:
+                  type: string
+                deniedReason:
+                  type: string
+                executedAt:
+                  type: string
+      additionalPrinterColumns:
+        - name: Tool
+          type: string
+          jsonPath: .spec.toolName
+        - name: Agent
+          type: string
+          jsonPath: .spec.agentId
+        - name: Tenant
+          type: string
+          jsonPath: .spec.tenantId
+        - name: TriggeredBy
+          type: string
+          jsonPath: .spec.triggeredBy
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

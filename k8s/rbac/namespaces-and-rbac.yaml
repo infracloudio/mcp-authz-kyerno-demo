@@ -1,0 +1,93 @@
+---
+# Tenant namespaces — each tenant gets its own namespace
+# This is the foundation of the multi-tenant isolation model
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-acme
+  labels:
+    mcp.security.io/tenant: "true"
+    tenant-id: acme
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-globex
+  labels:
+    mcp.security.io/tenant: "true"
+    tenant-id: globex
+
+---
+# Shared agents namespace — where the agent ServiceAccounts live
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agents
+  labels:
+    mcp.security.io/agents: "true"
+
+---
+# SRE Agent ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sre-agent
+  namespace: agents
+  labels:
+    mcp.security.io/agent-type: observability
+    mcp.security.io/risk-level: low
+
+---
+# Cost Agent ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cost-agent
+  namespace: agents
+  labels:
+    mcp.security.io/agent-type: cost-optimization
+    mcp.security.io/risk-level: low
+
+---
+# Remediation Agent ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: remediation-agent
+  namespace: agents
+  labels:
+    mcp.security.io/agent-type: remediation
+    mcp.security.io/risk-level: high
+
+---
+# ClusterRole: permission to create MCPToolInvocations (all agents need this)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-invocation-creator
+rules:
+  - apiGroups: ["mcp.security.io"]
+    resources: ["mcptoolinvocations"]
+    verbs: ["create", "get", "list", "watch"]
+
+---
+# Bind all agent ServiceAccounts to the invocation creator role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agent-mcp-invocation-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mcp-invocation-creator
+subjects:
+  - kind: ServiceAccount
+    name: sre-agent
+    namespace: agents
+  - kind: ServiceAccount
+    name: cost-agent
+    namespace: agents
+  - kind: ServiceAccount
+    name: remediation-agent
+    namespace: agents

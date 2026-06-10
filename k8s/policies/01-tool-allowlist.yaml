@@ -1,0 +1,57 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Policy 1: Tool Allowlist per Agent Identity
+# API: policies.kyverno.io/v1 / ValidatingPolicy  (ClusterPolicy is deprecated)
+#
+# Restricts which MCP tools each agent ServiceAccount is permitted to invoke.
+# Deny-by-default: agents must be explicitly listed with their allowed tools.
+# Uses CEL expressions — no JMESPath.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: mcp-tool-allowlist
+  annotations:
+    policies.kyverno.io/title: MCP Tool Allowlist per Agent Identity
+    policies.kyverno.io/category: MCP Authorization
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Enforces per-agent tool allowlists for MCP tool invocations.
+      Each agent ServiceAccount is restricted to a defined set of tools.
+      Any invocation outside the allowlist is denied at admission.
+spec:
+  validationActions:
+    - Deny   # change to Audit during initial rollout, flip to Deny after 2 weeks
+  matchConstraints:
+    resourceRules:
+      - apiGroups:   ["mcp.security.io"]
+        apiVersions: ["v1alpha1"]
+        operations:  ["CREATE"]
+        resources:   ["mcptoolinvocations"]
+  validations:
+    # ── SRE Agent allowlist ───────────────────────────────────────────────────
+    - expression: >-
+        !(request.userInfo.username == "system:serviceaccount:agents:sre-agent") ||
+        object.spec.toolName in ["query_metrics", "list_incidents", "get_runbook", "check_slo"]
+      messageExpression: >-
+        "sre-agent is not permitted to invoke '" + object.spec.toolName + "'. " +
+        "Allowed tools: query_metrics, list_incidents, get_runbook, check_slo"
+
+    # ── Cost Agent allowlist ──────────────────────────────────────────────────
+    - expression: >-
+        !(request.userInfo.username == "system:serviceaccount:agents:cost-agent") ||
+        object.spec.toolName in [
+          "get_resource_usage",
+          "list_rightsizing_recommendations",
+          "get_billing_summary"
+        ]
+      messageExpression: >-
+        "cost-agent is not permitted to invoke '" + object.spec.toolName + "'. " +
+        "Allowed tools: get_resource_usage, list_rightsizing_recommendations, get_billing_summary"
+
+    # ── Remediation Agent allowlist ───────────────────────────────────────────
+    - expression: >-
+        !(request.userInfo.username == "system:serviceaccount:agents:remediation-agent") ||
+        object.spec.toolName in ["restart_pod", "scale_deployment", "rollback_deployment"]
+      messageExpression: >-
+        "remediation-agent is not permitted to invoke '" + object.spec.toolName + "'. " +
+        "Allowed tools: restart_pod, scale_deployment, rollback_deployment"

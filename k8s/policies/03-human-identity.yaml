@@ -1,0 +1,89 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Policy 3a: Human Identity Injection
+# API: policies.kyverno.io/v1 / MutatingPolicy  (ClusterPolicy is deprecated)
+#
+# Annotates every MCPToolInvocation with triggered-by, triggered-at,
+# agent-id, and tenant-id before admission.
+# Uses CEL ApplyConfiguration patches — no JMESPath patchStrategicMerge.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
+metadata:
+  name: mcp-inject-human-identity
+  annotations:
+    policies.kyverno.io/title: MCP Human Identity Injection
+    policies.kyverno.io/category: MCP Authorization
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Mutates incoming MCPToolInvocations to inject audit annotations:
+      triggered-by, triggered-at, agent-id, tenant-id, and policy-version.
+      Ensures every tool call is traceable to a human — not just a service account.
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups:   ["mcp.security.io"]
+        apiVersions: ["v1alpha1"]
+        operations:  ["CREATE"]
+        resources:   ["mcptoolinvocations"]
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            metadata: Object.metadata{
+              annotations: {
+                "mcp.security.io/triggered-by":
+                  has(object.spec.triggeredBy) && object.spec.triggeredBy != ""
+                    ? object.spec.triggeredBy
+                    : request.userInfo.username,
+                "mcp.security.io/triggered-at":
+                  string(now()),
+                "mcp.security.io/agent-id":
+                  has(object.spec.agentId) ? object.spec.agentId : request.userInfo.username,
+                "mcp.security.io/tenant-id":
+                  has(object.spec.tenantId) ? object.spec.tenantId : object.metadata.namespace,
+                "mcp.security.io/policy-version": "v1"
+              }
+            }
+          }
+
+---
+# ──────────────────────────────────────────────────────────────────────────────
+# Policy 3b: Require Human Trigger for Write Tools
+# API: policies.kyverno.io/v1 / ValidatingPolicy  (ClusterPolicy is deprecated)
+#
+# Write-capable tools (restart, scale, rollback, delete) must carry a human
+# triggeredBy field. Automated invocations without human context are denied.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: mcp-require-human-trigger
+  annotations:
+    policies.kyverno.io/title: MCP Require Human Trigger for Write Tools
+    policies.kyverno.io/category: MCP Authorization
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Write-capable MCP tools must carry a human triggeredBy field.
+      Automated invocations without explicit human context are denied.
+spec:
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups:   ["mcp.security.io"]
+        apiVersions: ["v1alpha1"]
+        operations:  ["CREATE"]
+        resources:   ["mcptoolinvocations"]
+  validations:
+    - expression: >-
+        !(object.spec.toolName in [
+          "restart_pod",
+          "scale_deployment",
+          "rollback_deployment",
+          "delete_resource"
+        ]) ||
+        (has(object.spec.triggeredBy) && object.spec.triggeredBy != "")
+      messageExpression: >-
+        "Write-capable tool '" + object.spec.toolName + "' requires a human triggeredBy field. " +
+        "Automated invocations without explicit human context are denied."

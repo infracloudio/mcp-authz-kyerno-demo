@@ -1,0 +1,86 @@
+---
+# Deploy the demo app to your cluster for live demo
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-authz-demo
+  namespace: default
+  labels:
+    app: mcp-authz-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-authz-demo
+  template:
+    metadata:
+      labels:
+        app: mcp-authz-demo
+    spec:
+      serviceAccountName: mcp-authz-demo-sa
+      containers:
+        - name: demo
+          image: ghcr.io/your-username/mcp-authz-demo:latest  # replace with your image
+          ports:
+            - containerPort: 5000
+          env:
+            - name: PORT
+              value: "5000"
+            - name: DEBUG
+              value: "false"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-authz-demo-sa
+  namespace: default
+
+---
+# Grant demo app read access to MCPToolInvocations for display
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-authz-demo-reader
+rules:
+  - apiGroups: ["mcp.security.io"]
+    resources: ["mcptoolinvocations"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: ["kyverno.io"]
+    resources: ["clusterpolicies"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mcp-authz-demo-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mcp-authz-demo-reader
+subjects:
+  - kind: ServiceAccount
+    name: mcp-authz-demo-sa
+    namespace: default
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-authz-demo
+  namespace: default
+spec:
+  selector:
+    app: mcp-authz-demo
+  ports:
+    - port: 80
+      targetPort: 5000
+  type: ClusterIP

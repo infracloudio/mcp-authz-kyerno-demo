@@ -1,0 +1,45 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Policy 2: Multi-Tenant Isolation
+# API: policies.kyverno.io/v1 / ValidatingPolicy  (ClusterPolicy is deprecated)
+#
+# Validates that the tenant context on every MCPToolInvocation matches the
+# agent's namespace. Blocks cross-tenant tool calls structurally.
+# Uses CEL expressions — no JMESPath.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: mcp-tenant-isolation
+  annotations:
+    policies.kyverno.io/title: MCP Multi-Tenant Isolation
+    policies.kyverno.io/category: MCP Authorization
+    policies.kyverno.io/severity: critical
+    policies.kyverno.io/description: >-
+      Prevents cross-tenant MCP tool invocations by validating that the
+      tenantId in the invocation spec matches the agent's namespace.
+      This is the primary isolation control for shared MCP infrastructure.
+spec:
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups:   ["mcp.security.io"]
+        apiVersions: ["v1alpha1"]
+        operations:  ["CREATE"]
+        resources:   ["mcptoolinvocations"]
+  validations:
+    # ── Require tenantId to be present and non-empty ──────────────────────────
+    - expression: >-
+        has(object.spec.tenantId) && object.spec.tenantId != ""
+      message: >-
+        MCPToolInvocation must include a non-empty tenantId in spec.
+        Invocations without tenant context are rejected.
+
+    # ── tenantId must match the namespace the CR is created in ────────────────
+    - expression: >-
+        object.spec.tenantId == object.metadata.namespace
+      messageExpression: >-
+        "Cross-tenant invocation denied. " +
+        "Agent namespace '" + object.metadata.namespace + "' does not match " +
+        "tenantId '" + object.spec.tenantId + "'. " +
+        "Agents may only invoke tools within their own tenant context."

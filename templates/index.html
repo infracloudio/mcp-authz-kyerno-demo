@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MCP AuthZ Demo — Policy-Driven Tool Invocation Control</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.4.0/dist/tabler-icons.min.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="header-brand">
+        <span class="brand-icon"><i class="ti ti-shield-lock"></i></span>
+        <div>
+          <div class="brand-title">MCP AuthZ Demo</div>
+          <div class="brand-sub">Closing the AuthZ Gap · Policy-Driven Tool Invocation Control</div>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="badge badge-purple"><i class="ti ti-brand-github"></i> Kyverno</span>
+        <span class="badge badge-green"><i class="ti ti-plug"></i> MCP</span>
+        <span class="badge badge-gray">KCD · MCP Dev AI Summit</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="layout">
+
+      <!-- LEFT: Control Panel -->
+      <aside class="panel panel-left">
+
+        <!-- Quick Scenarios -->
+        <div class="section">
+          <div class="section-title">
+            <i class="ti ti-player-play"></i> Demo Scenarios
+          </div>
+          <div class="scenario-list">
+            {% for s in scenarios %}
+            <button class="scenario-btn" data-scenario="{{ s.id }}" title="{{ s.description }}">
+              {{ s.label }}
+            </button>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Custom Invocation Builder -->
+        <div class="section">
+          <div class="section-title">
+            <i class="ti ti-adjustments"></i> Custom Invocation
+          </div>
+
+          <div class="field">
+            <label class="label">Agent</label>
+            <select id="agentId">
+              {% for id, agent in agents.items() %}
+              <option value="{{ id }}">{{ agent.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="label">Tool</label>
+            <select id="toolName">
+              {% for t in all_tools %}
+              <option value="{{ t.name }}" data-write="{{ t.write | lower }}" data-cat="{{ t.category }}">
+                {{ t.name }}{% if t.write %} ⚡{% endif %}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="label">Namespace (agent's namespace)</label>
+            <select id="namespace">
+              {% for t in tenants %}
+              <option value="{{ t }}">{{ t }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="label">Tenant ID</label>
+            <select id="tenantId">
+              {% for t in tenants %}
+              <option value="{{ t }}">{{ t }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="label">
+              Triggered By (human email)
+              <span class="label-hint">leave empty to test no-human-trigger policy</span>
+            </label>
+            <input type="text" id="triggeredBy" placeholder="alice@acme.com" />
+          </div>
+
+          <div class="field">
+            <label class="label">Reason</label>
+            <input type="text" id="reason" placeholder="Why is this tool being called?" />
+          </div>
+
+          <button class="invoke-btn" id="invokeBtn">
+            <i class="ti ti-send"></i> Invoke Tool
+          </button>
+        </div>
+
+      </aside>
+
+      <!-- RIGHT: Policy Evaluation Result -->
+      <section class="panel panel-right">
+
+        <!-- Decision banner (hidden until result) -->
+        <div id="decisionBanner" class="decision-banner hidden">
+          <div class="decision-icon" id="decisionIcon"></div>
+          <div class="decision-text">
+            <div class="decision-label" id="decisionLabel"></div>
+            <div class="decision-sub" id="decisionSub"></div>
+          </div>
+        </div>
+
+        <!-- Invocation summary -->
+        <div id="invocationSummary" class="invocation-summary hidden">
+          <div class="summary-title"><i class="ti ti-file-description"></i> Invocation</div>
+          <div class="summary-grid" id="summaryGrid"></div>
+        </div>
+
+        <!-- Policy results -->
+        <div id="policyResults" class="policy-results hidden">
+          <div class="summary-title"><i class="ti ti-shield-check"></i> Policy Evaluation</div>
+          <div id="policyList"></div>
+        </div>
+
+        <!-- Audit annotations -->
+        <div id="auditSection" class="audit-section hidden">
+          <div class="summary-title"><i class="ti ti-database"></i> Injected Audit Annotations</div>
+          <div class="audit-table" id="auditTable"></div>
+        </div>
+
+        <!-- Empty state -->
+        <div class="empty-state" id="emptyState">
+          <i class="ti ti-shield-question"></i>
+          <p>Select a scenario or build a custom invocation to see policy evaluation</p>
+          <p class="empty-sub">Each invocation is evaluated against the four Kyverno ClusterPolicies in real-time</p>
+        </div>
+
+      </section>
+
+    </div>
+
+    <!-- Architecture diagram strip -->
+    <div class="arch-strip">
+      <div class="arch-title"><i class="ti ti-topology-star-3"></i> Enforcement Architecture</div>
+      <div class="arch-flow">
+        <div class="arch-node">
+          <i class="ti ti-robot"></i>
+          <span>AI Agent</span>
+        </div>
+        <div class="arch-arrow"><i class="ti ti-arrow-right"></i></div>
+        <div class="arch-node">
+          <i class="ti ti-file-code"></i>
+          <span>MCPToolInvocation CR</span>
+        </div>
+        <div class="arch-arrow"><i class="ti ti-arrow-right"></i></div>
+        <div class="arch-node arch-node-highlight">
+          <i class="ti ti-shield-lock"></i>
+          <span>Kyverno Admission Webhook</span>
+        </div>
+        <div class="arch-arrow"><i class="ti ti-arrow-right"></i></div>
+        <div class="arch-node arch-node-policy">
+          <i class="ti ti-list-check"></i>
+          <span>ClusterPolicies ×4</span>
+        </div>
+        <div class="arch-arrow"><i class="ti ti-arrow-right"></i></div>
+        <div class="arch-node arch-node-split">
+          <div class="split-allow"><i class="ti ti-check"></i> Allow</div>
+          <div class="split-deny"><i class="ti ti-x"></i> Deny</div>
+        </div>
+        <div class="arch-arrow"><i class="ti ti-arrow-right"></i></div>
+        <div class="arch-node">
+          <i class="ti ti-plug"></i>
+          <span>MCP Server</span>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script src="{{ url_for('static', filename='css/app.js') }}"></script>
+</body>
+</html>

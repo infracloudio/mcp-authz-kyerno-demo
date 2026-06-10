@@ -1,0 +1,327 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MCP Server Deployment — tenant-acme
+#
+# Architecture:
+#   Pod contains TWO containers:
+#   1. kubernetes-mcp-server  (real MCP server, port 8080, internal only)
+#   2. authz-proxy            (policy enforcement, port 8090, agents connect here)
+#
+# Agents NEVER talk directly to the MCP server on :8080.
+# They talk to the authz-proxy on :8090.
+# The proxy creates MCPToolInvocation CRs → Kyverno admits/denies → proxy forwards.
+# ──────────────────────────────────────────────────────────────────────────────
+
+---
+# ServiceAccount for the MCP server pod in tenant-acme
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-server-sa
+  namespace: tenant-acme
+  labels:
+    mcp.security.io/component: mcp-server
+    mcp.security.io/tenant: tenant-acme
+
+---
+# RBAC: MCP server can read/act on resources in its own namespace only
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mcp-server-role
+  namespace: tenant-acme
+rules:
+  # Read access for observability tools
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  # Write access for remediation tools (gated by Kyverno policy)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["patch", "update"]
+  # Metrics
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+  # MCPToolInvocation — the proxy needs to create these for Kyverno
+  - apiGroups: ["mcp.security.io"]
+    resources: ["mcptoolinvocations"]
+    verbs: ["create", "get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mcp-server-rolebinding
+  namespace: tenant-acme
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mcp-server-role
+subjects:
+  - kind: ServiceAccount
+    name: mcp-server-sa
+    namespace: tenant-acme
+
+---
+# The MCP server Deployment — two containers: mcp-server + authz-proxy
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+  namespace: tenant-acme
+  labels:
+    app: mcp-server
+    mcp.security.io/tenant: tenant-acme
+    mcp.security.io/policy-enforced: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-server
+      tenant: tenant-acme
+  template:
+    metadata:
+      labels:
+        app: mcp-server
+        tenant: tenant-acme
+        mcp.security.io/component: mcp-server
+      annotations:
+        mcp.security.io/policy-enforced: "true"
+        mcp.security.io/tenant: tenant-acme
+    spec:
+      serviceAccountName: mcp-server-sa
+
+      containers:
+        # ── Container 1: kubernetes-mcp-server (upstream) ──────────────────
+        - name: kubernetes-mcp-server
+          image: quay.io/containers/kubernetes_mcp_server:latest
+          args:
+            - --stateless
+            - --port=8080
+          ports:
+            - name: mcp
+              containerPort: 8080
+              # NOT exposed outside the pod — only authz-proxy can reach it
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+        # ── Container 2: authz-proxy (Kyverno enforcement bridge) ──────────
+        - name: authz-proxy
+          image: mcp-authz-proxy:demo
+          imagePullPolicy: Never          # loaded into kind via: kind load docker-image mcp-authz-proxy:demo
+          ports:
+            - name: proxy
+              containerPort: 8090
+          env:
+            - name: MCP_SERVER_URL
+              value: "http://localhost:8080"   # sidecar — same pod network
+            - name: PROXY_PORT
+              value: "8090"
+            - name: TENANT_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: AGENT_ID
+              value: "sre-agent"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8090
+            initialDelaySeconds: 5
+            periodSeconds: 30
+
+---
+# Service — agents connect to port 8090 (authz-proxy), NOT 8080 (mcp-server)
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-server
+  namespace: tenant-acme
+  labels:
+    app: mcp-server
+    mcp.security.io/tenant: tenant-acme
+  annotations:
+    mcp.security.io/note: "Connect to port 8090 (authz-proxy). Port 8080 is internal only."
+spec:
+  selector:
+    app: mcp-server
+    tenant: tenant-acme
+  ports:
+    - name: authz-proxy   # ← agents connect here
+      port: 8090
+      targetPort: 8090
+    - name: mcp-server    # ← internal only, do not expose outside cluster
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
+
+---
+# Repeat for tenant-globex — same structure, different namespace
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-server-sa
+  namespace: tenant-globex
+  labels:
+    mcp.security.io/component: mcp-server
+    mcp.security.io/tenant: tenant-globex
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mcp-server-role
+  namespace: tenant-globex
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  - apiGroups: ["mcp.security.io"]
+    resources: ["mcptoolinvocations"]
+    verbs: ["create", "get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mcp-server-rolebinding
+  namespace: tenant-globex
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mcp-server-role
+subjects:
+  - kind: ServiceAccount
+    name: mcp-server-sa
+    namespace: tenant-globex
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+  namespace: tenant-globex
+  labels:
+    app: mcp-server
+    mcp.security.io/tenant: tenant-globex
+    mcp.security.io/policy-enforced: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-server
+      tenant: tenant-globex
+  template:
+    metadata:
+      labels:
+        app: mcp-server
+        tenant: tenant-globex
+        mcp.security.io/component: mcp-server
+      annotations:
+        mcp.security.io/policy-enforced: "true"
+        mcp.security.io/tenant: tenant-globex
+    spec:
+      serviceAccountName: mcp-server-sa
+      containers:
+        - name: kubernetes-mcp-server
+          image: quay.io/containers/kubernetes_mcp_server:latest
+          args:
+            - --stateless
+            - --port=8080
+          ports:
+            - name: mcp
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+        - name: authz-proxy
+          image: mcp-authz-proxy:demo
+          imagePullPolicy: Never
+          ports:
+            - name: proxy
+              containerPort: 8090
+          env:
+            - name: MCP_SERVER_URL
+              value: "http://localhost:8080"
+            - name: PROXY_PORT
+              value: "8090"
+            - name: TENANT_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: AGENT_ID
+              value: "sre-agent"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-server
+  namespace: tenant-globex
+  labels:
+    app: mcp-server
+    mcp.security.io/tenant: tenant-globex
+spec:
+  selector:
+    app: mcp-server
+    tenant: tenant-globex
+  ports:
+    - name: authz-proxy
+      port: 8090
+      targetPort: 8090
+    - name: mcp-server
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
