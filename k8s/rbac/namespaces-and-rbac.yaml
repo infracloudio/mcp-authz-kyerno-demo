@@ -1,5 +1,5 @@
 ---
-# Tenant namespaces — each tenant gets its own namespace
+# Tenant namespaces
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -16,7 +16,7 @@ metadata:
     mcp.security.io/tenant: "true"
     tenant-id: globex
 ---
-# Shared agents namespace — where the agent ServiceAccounts live
+# Agents namespace
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -55,8 +55,6 @@ metadata:
     mcp.security.io/risk-level: high
 
 # ── MCP Server ServiceAccounts (one per tenant) ───────────────────────────────
-# These SAs are used by the kubernetes-mcp-server + authz-proxy pod.
-# They need K8s API permissions to execute tool calls (pods_list etc.)
 
 ---
 apiVersion: v1
@@ -89,7 +87,6 @@ rules:
     resources: ["mcptoolinvocations"]
     verbs: ["create", "get", "list", "watch"]
 ---
-# Bind all agent SAs to invocation creator role
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -110,8 +107,6 @@ subjects:
     namespace: agents
 
 # ── ClusterRole: mcp-server executes K8s operations ──────────────────────────
-# kubernetes-mcp-server needs these to actually run tool calls.
-# Intentionally broad — Kyverno policies are the enforcement layer on top.
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -119,21 +114,32 @@ kind: ClusterRole
 metadata:
   name: mcp-server-operator
 rules:
-  # Core resources — pods, services, configmaps, namespaces
+  # Core — pods, services, configmaps
   - apiGroups: [""]
     resources: ["pods", "pods/log", "pods/exec"]
-    verbs: ["get", "list", "watch", "delete"]
+    verbs: ["get", "list", "watch", "delete", "create"]
   - apiGroups: [""]
     resources: ["services", "endpoints", "configmaps", "events"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["namespaces", "nodes"]
     verbs: ["get", "list"]
-  # Apps — deployments, replicasets, statefulsets
+  - apiGroups: [""]
+    resources: ["nodes/stats", "nodes/metrics"]
+    verbs: ["get", "list"]
+  # Apps — deployments, statefulsets, replicasets
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
     verbs: ["get", "list", "watch", "update", "patch"]
-  # MCPToolInvocations — proxy needs to create CRs
+  # Scale subresource — needed for resources_scale tool
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["get", "update", "patch"]
+  # Metrics
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list"]
+  # MCPToolInvocations — proxy creates CRs
   - apiGroups: ["mcp.security.io"]
     resources: ["mcptoolinvocations"]
     verbs: ["create", "get", "list", "watch", "delete"]
