@@ -30,6 +30,8 @@ import asyncio
 PROXY_URL    = os.environ.get("PROXY_URL",    "http://localhost:8090")
 TRIGGERED_BY = os.environ.get("TRIGGERED_BY", "alice@acme.com")
 AGENT_ID     = os.environ.get("AGENT_ID",     "sre-agent")
+NAMESPACE    = os.environ.get("NAMESPACE",    "tenant-acme")
+DEPLOYMENT   = os.environ.get("DEPLOYMENT",   "nginx")
 
 # ── MCP JSON-RPC helpers ──────────────────────────────────────────────────────
 
@@ -122,13 +124,14 @@ async def run_demo():
     print("╚══════════════════════════════════════════════════════════╝\n")
 
     print("▶ Connected to authz-proxy. Running 4 scenarios...\n")
+    print(f"  Namespace  : {NAMESPACE}")
+    print(f"  Deployment : {DEPLOYMENT}\n")
 
     # ── Scenario 1: ALLOWED ───────────────────────────────────────────────────
-    # sre-agent lists pods in own namespace — in allowlist, tenant matches
     print("  [1/4] SRE lists pods in own namespace")
     result = await mcp_call(
         tool_name="pods_list_in_namespace",
-        arguments={"namespace": "tenant-acme"},
+        arguments={"namespace": NAMESPACE},
         reason="SRE checking pod status for incident investigation",
     )
     print_result(
@@ -140,11 +143,10 @@ async def run_demo():
     await asyncio.sleep(0.5)
 
     # ── Scenario 2: DENIED — tool not in allowlist ────────────────────────────
-    # sre-agent tries pods_delete — only remediation-agent can delete
     print("\n  [2/4] SRE tries to delete a pod")
     result = await mcp_call(
         tool_name="pods_delete",
-        arguments={"name": "checkout-abc", "namespace": "tenant-acme"},
+        arguments={"name": "test-pod", "namespace": NAMESPACE},
         reason="SRE trying to remove a crashed pod",
     )
     print_result(
@@ -181,9 +183,9 @@ async def run_demo():
         arguments={
             "apiVersion": "apps/v1",
             "kind":       "Deployment",
-            "name":       "checkout",
-            "namespace":  "tenant-acme",
-            "scale":      5,              # ← correct param name
+            "name":       DEPLOYMENT,
+            "namespace":  NAMESPACE,
+            "scale":      5,
         },
         reason="Auto-scaling triggered by metric alert",
         triggered_by="",
@@ -203,12 +205,12 @@ async def run_demo():
 
     print("\n✅ Demo complete.\n")
     print("  Individual scenarios:")
-    print("    python agent_client.py --single list-pods")
-    print("    python agent_client.py --single delete-pod")
-    print("    python agent_client.py --single cross-tenant")
-    print("    python agent_client.py --single scale-no-human")
-    print("    AGENT_ID=remediation-agent TRIGGERED_BY=bob@acme.com \\")
-    print("    python agent_client.py --single scale")
+    print("    python agent/agent_client.py --single list-pods")
+    print("    python agent/agent_client.py --single delete-pod")
+    print("    python agent/agent_client.py --single cross-tenant")
+    print("    python agent/agent_client.py --single scale-no-human")
+    print("    AGENT_ID=remediation-agent TRIGGERED_BY=bob@acme.com DEPLOYMENT=nginx NAMESPACE=tenant-acme \\")
+    print("    python agent/agent_client.py --single scale")
     print()
 
 
@@ -219,13 +221,13 @@ async def run_single(scenario: str):
         # ✅ sre-agent reads pods in own namespace — ALLOWED
         "list-pods": lambda: mcp_call(
             "pods_list_in_namespace",
-            {"namespace": "tenant-acme"},
+            {"namespace": NAMESPACE},
             "Checking pod status",
         ),
         # ❌ sre-agent tries delete — not in allowlist
         "delete-pod": lambda: mcp_call(
             "pods_delete",
-            {"name": "checkout-abc", "namespace": "tenant-acme"},
+            {"name": "test-pod", "namespace": NAMESPACE},
             "Deleting crashed pod",
         ),
         # ❌ sre-agent queries tenant-globex — cross-tenant blocked
@@ -240,9 +242,9 @@ async def run_single(scenario: str):
             {
                 "apiVersion": "apps/v1",
                 "kind":       "Deployment",
-                "name":       "checkout",
-                "namespace":  "tenant-acme",
-                "scale":      5,            # ← correct param name
+                "name":       DEPLOYMENT,
+                "namespace":  NAMESPACE,
+                "scale":      5,
             },
             "Autonomous scale attempt",
             triggered_by="",
@@ -254,9 +256,9 @@ async def run_single(scenario: str):
             {
                 "apiVersion": "apps/v1",
                 "kind":       "Deployment",
-                "name":       "checkout",
-                "namespace":  "tenant-acme",
-                "scale":      3,            # ← correct param name
+                "name":       DEPLOYMENT,
+                "namespace":  NAMESPACE,
+                "scale":      3,
             },
             "Human-approved scale",
         ),
